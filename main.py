@@ -707,6 +707,29 @@ class TerrainApp(QMainWindow):
         self.dem_folder=resource_path(os.path.join("terrain_files","dem")); self.stl_folder=resource_path(os.path.join("terrain_files","stl"))
         os.makedirs(self.dem_folder,exist_ok=True); os.makedirs(self.stl_folder,exist_ok=True)
         self.update_file_lists(); self.selected_dem=None; self.current_worker=None
+        
+        # start with convert disabled until a DEM is selected
+        self.stl_button.setEnabled(False)
+
+        # respond to selection changes (single, non-opening)
+        # ensure only one connection exists
+        try:
+            self.dem_list.itemSelectionChanged.disconnect()
+        except Exception:
+            pass
+        self.dem_list.itemSelectionChanged.connect(self.on_dem_selected)
+
+        try:
+            self.stl_list.itemSelectionChanged.disconnect()
+        except Exception:
+            pass
+        self.stl_list.itemSelectionChanged.connect(self.on_stl_selected)
+
+        # double-click = open (single action)
+        # itemDoubleClicked will pass the QListWidgetItem instance to the slot
+        self.dem_list.itemDoubleClicked.connect(self.open_dem_from_item)
+        self.stl_list.itemDoubleClicked.connect(self.open_stl_from_item)
+
         self.load_settings()
         self.dem_list.itemSelectionChanged.connect(self.on_dem_selected)
         self.stl_list.itemSelectionChanged.connect(self.on_stl_selected)
@@ -723,10 +746,25 @@ class TerrainApp(QMainWindow):
         repo_act = QAction("Github", self);repo_act.triggered.connect(self._Github);help_menu.addAction(repo_act)
 
 
-        act_3d = QAction("Open 3D Viewer", self); act_3d.triggered.connect(self.open_3d_viewer_blank)
-        act_dem = QAction("Open DEM Viewer", self); act_dem.triggered.connect(self.open_dem_viewer_blank)
-        menubar.addAction(act_3d); menubar.addAction(act_dem)
+        # act_3d = QAction("Open 3D Viewer", self); act_3d.triggered.connect(self.open_3d_viewer_blank)
+        # act_dem = QAction("Open DEM Viewer", self); act_dem.triggered.connect(self.open_dem_viewer_blank)
+        # menubar.addAction(act_3d); menubar.addAction(act_dem)
+        open_world = QAction("Open 3D World", self)
+        open_world.triggered.connect(self.open_3d_world)
+        menubar.addAction(open_world)
 
+    def open_3d_world(self):
+        """
+        Placeholder for the upcoming 3D World feature.
+        """
+        QMessageBox.information(
+            self,
+            "3D World",
+            "3D World feature is coming soon!"
+        )
+
+    
+    
     def _about(self): QMessageBox.information(self,"About","3D Terrain Generator v2.0\nEnhanced version \nCreated by Rohon Alam \nMore Updates are Coming Soon! \nContact: \n     rohon.alam1555@gmail.coom")
     def _Github(self): QDesktopServices.openUrl(QUrl("https://github.com/RohonAlam/3D-Terrain-Generator"))
     def finish_splash(self): self.splash.close()
@@ -755,19 +793,45 @@ class TerrainApp(QMainWindow):
         QMessageBox.information(self,"Settings","Settings saved")
 
     def update_file_lists(self):
-        self.dem_list.clear(); self.stl_list.clear()
+        from PyQt5.QtCore import Qt
+        self.dem_list.clear()
+        self.stl_list.clear()
+
+        # DEM files
         for f in sorted(os.listdir(self.dem_folder)):
             try:
-                size=os.path.getsize(os.path.join(self.dem_folder,f))/1024
-                self.dem_list.addItem(f"{f} ({size:.1f} KB)")
+                size = os.path.getsize(os.path.join(self.dem_folder, f)) / 1024
+                display = f"{f} ({size:.1f} KB)"
+                item = QListWidget.QListWidgetItem(display) if False else None  # placeholder so linter doesn't complain
+                # create item and store actual filename in UserRole
+                item = QListWidget().itemPrototype()  # hack to keep type hints happy (we overwrite below)
             except Exception:
-                self.dem_list.addItem(f)
+                # fallback simple add
+                item = None
+
+            try:
+                # proper create
+                item = QListWidget().itemPrototype()  # placeholder ignored; will overwrite with real object below
+            except Exception:
+                pass
+
+            # create actual QListWidgetItem instance
+            from PyQt5.QtWidgets import QListWidgetItem
+            li = QListWidgetItem(display)
+            li.setData(Qt.UserRole, f)
+            self.dem_list.addItem(li)
+
+        # STL / 3D files
         for f in sorted(os.listdir(self.stl_folder)):
             try:
-                size=os.path.getsize(os.path.join(self.stl_folder,f))/1024
-                self.stl_list.addItem(f"{f} ({size:.1f} KB)")
+                size = os.path.getsize(os.path.join(self.stl_folder, f)) / 1024
+                display = f"{f} ({size:.1f} KB)"
             except Exception:
-                self.stl_list.addItem(f)
+                display = f
+            from PyQt5.QtWidgets import QListWidgetItem
+            li = QListWidgetItem(display)
+            li.setData(Qt.UserRole, f)
+            self.stl_list.addItem(li)
 
     def add_dem_file(self,file_path):
         target_file=os.path.join(self.dem_folder,os.path.basename(file_path))
@@ -806,56 +870,132 @@ class TerrainApp(QMainWindow):
                 fig.savefig(tmp, dpi=100); plt.close(fig)
         except Exception:
             logger.exception("Thumbnail generation failed")
-
     def on_dem_selected(self):
+        """Only update the selected_dem and enable Convert. Do not open viewer here."""
+        from PyQt5.QtCore import Qt
         items = self.dem_list.selectedItems()
-        if not items: return
-        text = items[0].text().split(' ')[0]
-        file = os.path.join(self.dem_folder, text)
-        if os.path.exists(file):
-            try:
-                viewer = DEMViewerWindow(file, parent=None)
-                viewer.setAttribute(Qt.WA_DeleteOnClose, True)
-                # keep reference
-                self._viewer_windows.append(viewer)
-                # remove when closed/destroyed
-                viewer.destroyed.connect(lambda _, v=viewer: self._viewer_windows.remove(v) if v in self._viewer_windows else None)
-                viewer.show()
-            except Exception:
-                logger.exception("Failed to open DEM viewer")
+        if not items:
+            self.selected_dem = None
+            self.stl_button.setEnabled(False)
+            return
+
+        item = items[0]
+        # prefer UserRole if present
+        filename = item.data(Qt.UserRole) if item.data(Qt.UserRole) else item.text().rsplit(' (', 1)[0]
+        file = os.path.join(self.dem_folder, filename)
+
+        if not os.path.exists(file):
+            self.selected_dem = None
+            QMessageBox.warning(self, "File missing", f"The file {filename} does not exist.")
+            self.stl_button.setEnabled(False)
+            return
+
+        self.selected_dem = file
+        try:
+            SETTINGS.setValue('last_dem', self.selected_dem)
+        except Exception:
+            pass
+
+        # enable convert button (but DO NOT open viewer)
+        self.stl_button.setEnabled(True)
+ 
+    def open_dem_from_item(self, item):
+        """Open DEM viewer for a QListWidgetItem (double-click or context menu)."""
+        from PyQt5.QtCore import Qt
+        if item is None:
+            return
+        filename = item.data(Qt.UserRole) if item.data(Qt.UserRole) else item.text().rsplit(' (', 1)[0]
+        file = os.path.join(self.dem_folder, filename)
+        if not os.path.exists(file):
+            QMessageBox.warning(self, "File missing", f"The file {filename} does not exist.")
+            return
+        try:
+            viewer = DEMViewerWindow(file, parent=None)
+            viewer.setAttribute(Qt.WA_DeleteOnClose, True)
+            self._viewer_windows.append(viewer)
+            viewer.destroyed.connect(lambda _, v=viewer: self._viewer_windows.remove(v) if v in self._viewer_windows else None)
+            viewer.show()
+        except Exception:
+            logger.exception("Failed to open DEM viewer")
+
 
     def on_stl_selected(self):
+        """Only update selection; do not open viewer automatically."""
+        from PyQt5.QtCore import Qt
         items = self.stl_list.selectedItems()
-        if not items: return
-        text = items[0].text().split(' ')[0]
-        file = os.path.join(self.stl_folder, text)
-        if os.path.exists(file):
-            try:
-                viewer = STLViewerWindow(file, parent=None)
-                viewer.setAttribute(Qt.WA_DeleteOnClose, True)
-                self._viewer_windows.append(viewer)
-                viewer.destroyed.connect(lambda _, v=viewer: self._viewer_windows.remove(v) if v in self._viewer_windows else None)
-                viewer.show()
-            except Exception:
-                logger.exception("Failed to open STL viewer")
+        if not items:
+            return
+        item = items[0]
+        filename = item.data(Qt.UserRole) if item.data(Qt.UserRole) else item.text().rsplit(' (', 1)[0]
+        file = os.path.join(self.stl_folder, filename)
+        # store last selected stl if you want (optional)
+        self.selected_stl = file if os.path.exists(file) else None
+ 
+    def open_stl_from_item(self, item):
+        if item is None:
+            return
+        filename = item.data(Qt.UserRole) if item.data(Qt.UserRole) else item.text().rsplit(' (', 1)[0]
+        file = os.path.join(self.stl_folder, filename)
+        if not os.path.exists(file):
+            QMessageBox.warning(self, "File missing", f"The file {filename} does not exist.")
+            return
+        try:
+            viewer = STLViewerWindow(file, parent=None)
+            viewer.setAttribute(Qt.WA_DeleteOnClose, True)
+            self._viewer_windows.append(viewer)
+            viewer.destroyed.connect(lambda _, v=viewer: self._viewer_windows.remove(v) if v in self._viewer_windows else None)
+            viewer.show()
+        except Exception:
+            logger.exception("Failed to open STL viewer")
 
     def dem_context_menu(self,pos):
         idx=self.dem_list.indexAt(pos)
         if not idx.isValid(): return
         item=self.dem_list.item(idx.row())
-        menu=QMenu(); open_act=QAction('Open in Folder',self); open_act.triggered.connect(lambda: os.startfile(self.dem_folder))
-        reproc_act=QAction('Re-generate Thumbnail',self); reproc_act.triggered.connect(lambda: self.generate_thumbnail(os.path.join(self.dem_folder,item.text().split(' ')[0])))
-        delete_act=QAction('Delete',self); delete_act.triggered.connect(lambda: self._delete_file(os.path.join(self.dem_folder,item.text().split(' ')[0])))
-        menu.addAction(open_act); menu.addAction(reproc_act); menu.addAction(delete_act); menu.exec_(self.dem_list.mapToGlobal(pos))
+        from PyQt5.QtCore import Qt
+        # get filename robustly
+        filename = item.data(Qt.UserRole) if item.data(Qt.UserRole) else item.text().rsplit(' (', 1)[0]
+        fullpath = os.path.join(self.dem_folder, filename)
+
+        menu=QMenu()
+        open_act=QAction('Open',self)
+        open_act.triggered.connect(lambda: self.open_dem_from_item(item))
+        open_folder_act=QAction('Open in Folder',self)
+        open_folder_act.triggered.connect(lambda: os.startfile(self.dem_folder))
+        reproc_act=QAction('Re-generate Thumbnail',self)
+        reproc_act.triggered.connect(lambda: self.generate_thumbnail(fullpath))
+        delete_act=QAction('Delete',self)
+        delete_act.triggered.connect(lambda: self._delete_file(fullpath))
+
+        menu.addAction(open_act)
+        menu.addAction(open_folder_act)
+        menu.addAction(reproc_act)
+        menu.addAction(delete_act)
+        menu.exec_(self.dem_list.mapToGlobal(pos))
 
     def stl_context_menu(self,pos):
         idx=self.stl_list.indexAt(pos)
         if not idx.isValid(): return
         item=self.stl_list.item(idx.row())
-        menu=QMenu(); open_act=QAction('Open in Folder',self); open_act.triggered.connect(lambda: os.startfile(self.stl_folder))
-        export_act=QAction('Export As...',self); export_act.triggered.connect(lambda: self._export_as(os.path.join(self.stl_folder,item.text().split(' ')[0])))
-        delete_act=QAction('Delete',self); delete_act.triggered.connect(lambda: self._delete_file(os.path.join(self.stl_folder,item.text().split(' ')[0])))
-        menu.addAction(open_act); menu.addAction(export_act); menu.addAction(delete_act); menu.exec_(self.stl_list.mapToGlobal(pos))
+        from PyQt5.QtCore import Qt
+        filename = item.data(Qt.UserRole) if item.data(Qt.UserRole) else item.text().rsplit(' (', 1)[0]
+        fullpath = os.path.join(self.stl_folder, filename)
+
+        menu=QMenu()
+        open_act=QAction('Open',self)
+        open_act.triggered.connect(lambda: self.open_stl_from_item(item))
+        open_folder_act=QAction('Open in Folder',self)
+        open_folder_act.triggered.connect(lambda: os.startfile(self.stl_folder))
+        export_act=QAction('Export As...',self)
+        export_act.triggered.connect(lambda: self._export_as(fullpath))
+        delete_act=QAction('Delete',self)
+        delete_act.triggered.connect(lambda: self._delete_file(fullpath))
+
+        menu.addAction(open_act)
+        menu.addAction(open_folder_act)
+        menu.addAction(export_act)
+        menu.addAction(delete_act)
+        menu.exec_(self.stl_list.mapToGlobal(pos))
 
     def _delete_file(self,path):
         try: os.remove(path); self.update_file_lists()
