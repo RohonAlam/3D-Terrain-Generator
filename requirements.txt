@@ -1,0 +1,11 @@
+pyqt5
+pyqtwebengine
+pyvista
+pyvistaqt
+vtk
+rasterio
+numpy
+matplotlib
+folium
+requests
+earthengine-api
