@@ -89,5 +89,8 @@ If you encounter missing-module or DLL errors during runtime, rebuild with:
 pyinstaller --clean terrainapp.spec
 Run the EXE from a console (Command Prompt or PowerShell) to see detailed error messages.
 
+Note :- put App_icon in the same folder as all other source files
+
 You’re Done!
+
 You now have a built executable of the 3D Terrain Print application ready to distribute or run on Windows.
